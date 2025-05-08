@@ -1,0 +1,136 @@
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List, Any
+from datetime import date, datetime
+
+class Attachment(BaseModel):
+    id: int
+    file_type: Optional[str]
+    file_name: str
+    file_path: str
+    uploaded_by: Optional[str]
+    uploaded_at: datetime
+    description: Optional[str]
+    class Config:
+        from_attributes = True
+
+class EditHistory(BaseModel):
+    id: int
+    edited_by: Optional[str]
+    edited_at: datetime
+    changes: Any
+    class Config:
+        from_attributes = True
+
+class WorkflowStep(BaseModel):
+    id: int
+    step_number: int
+    signoff_person: Optional[str]
+    signoff_status: Optional[str]
+    signoff_date: Optional[datetime]
+    remarks: Optional[str]
+    class Config:
+        from_attributes = True
+
+class WorkflowBase(BaseModel):
+    biller_integration_name: str
+    category: Optional[str]
+    integration_type: Optional[str]
+    company_name: Optional[str]
+    phone_number: Optional[str]
+    email: Optional[EmailStr]
+    fees_type: Optional[str]
+    fees_style: Optional[str]
+    mdr_fee: Optional[float]
+    fee_waive: Optional[bool]
+    fee_waive_end_date: Optional[date]
+    agent_toggle: Optional[bool]
+    agent_fee: Optional[float]
+    system_fee: Optional[float]
+    transaction_agent_fee: Optional[float]
+    dtr_fee: Optional[float]
+    business_owner: Optional[str]
+    requested_go_live_date: Optional[date]
+    setup_fee: Optional[float]
+    setup_fee_waive: Optional[bool]
+    setup_fee_waive_end_date: Optional[date]
+    maintenance_fee: Optional[float]
+    maintenance_fee_waive: Optional[bool]
+    maintenance_fee_waive_end_date: Optional[date]
+    portal_fee: Optional[float]
+    portal_fee_waive: Optional[bool]
+    portal_fee_waive_end_date: Optional[date]
+    requested_by: Optional[str]
+    remarks: Optional[str]
+    last_updated_by: Optional[str]
+    go_live_date: Optional[date]
+
+class WorkflowCreate(WorkflowBase):
+    title: Optional[str] = None  # Made optional since it's auto-generated on the server
+    biller_integration_name: str
+    category: str
+    integration_type: str
+    company_name: str
+    phone_number: str
+    email: EmailStr
+    fees_type: str
+    fees_style: str
+    mdr_fee: float
+    fee_waive: bool
+    fee_waive_end_date: date
+    agent_toggle: bool
+    agent_fee: float
+    system_fee: float
+    transaction_agent_fee: float
+    dtr_fee: float
+    business_owner: str
+    requested_go_live_date: date
+    setup_fee: float
+    setup_fee_waive: bool
+    setup_fee_waive_end_date: date
+    maintenance_fee: float
+    maintenance_fee_waive: bool
+    maintenance_fee_waive_end_date: date
+    portal_fee: float
+    portal_fee_waive: bool
+    portal_fee_waive_end_date: date
+    requested_by: str
+    remarks: str
+    last_updated_by: str
+    go_live_date: date
+
+class WorkflowUpdate(WorkflowBase):
+    current_step: Optional[int]
+    status: Optional[str]
+    last_updated_date: Optional[datetime]
+
+class Workflow(WorkflowBase):
+    id: int
+    title: str
+    submit_date: datetime
+    current_step: int
+    status: str
+    last_updated_date: datetime
+    class Config:
+        from_attributes = True
+
+class WorkflowList(BaseModel):
+    id: int
+    title: str
+    current_step: int
+    status: str
+    submit_date: datetime
+    class Config:
+        from_attributes = True
+
+class WorkflowDetail(Workflow):
+    attachments: List[Attachment] = []
+    steps: List[WorkflowStep] = []
+    edit_history: List[EditHistory] = []
+
+class StepSignoff(BaseModel):
+    signoff_person: str
+    signoff_status: str
+    remarks: Optional[str]
+    signoff_date: Optional[datetime] = None
+
+
