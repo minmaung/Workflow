@@ -1,6 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { API_BASE } from '../api';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+
+// Interface for custom fields
+interface CustomField {
+  id: string;
+  name: string;
+  type: 'text' | 'number' | 'dropdown';
+  options?: string[];
+  required: boolean;
+}
+
+// Interface for file attachment
+interface FileAttachment extends File {
+  description?: string;
+}
 
 const initialForm = {
   // title field will be auto-generated on the server side as WF00001 format
@@ -35,53 +49,44 @@ const initialForm = {
   remarks: '',
   last_updated_by: '',
   go_live_date: new Date().toISOString().split('T')[0], // Default to today
-  custom_fields: [], // For storing dynamic field definitions for biller forms
-  report_fields: [], // For storing field names that billers want to see in transaction reports
+  custom_fields: [] as CustomField[], // For storing dynamic field definitions for biller forms
+  report_fields: [] as string[], // For storing field names that billers want to see in transaction reports
 };
-
-// Interface for custom fields
-interface CustomField {
-  id: string;
-  name: string;
-  type: 'text' | 'number' | 'dropdown';
-  options?: string[];
-  required: boolean;
-}
 
 export default function CreateWorkflow() {
   const [form, setForm] = useState(initialForm);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [attachments, setAttachments] = useState<File[]>([]);
-  const [attachmentDescriptions, setAttachmentDescriptions] = useState<{[key: string]: string}>({});
-  const [showCustomFields, setShowCustomFields] = useState(false);
-  const [showReportFields, setShowReportFields] = useState(false);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [reportField, setReportField] = useState<string>('');
   const [reportFields, setReportFields] = useState<string[]>([]);
-  const [newReportField, setNewReportField] = useState<string>('');
-  const [newOption, setNewOption] = useState<{ fieldId: string, option: string }>({ fieldId: '', option: '' });
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  
-  // Check if custom fields and report fields sections should be visible based on integration type
-  useEffect(() => {
-    const isBiller = form.integration_type === 'Online Biller' || form.integration_type === 'Offline Biller';
-    setShowCustomFields(isBiller);
-    setShowReportFields(isBiller);
-  }, [form.integration_type]);
 
+  // Function to handle form input changes
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) {
     const { name, value, type } = e.target;
     if (type === 'checkbox') {
       setForm(f => ({ ...f, [name]: (e.target as HTMLInputElement).checked }));
-    } else if (type === 'number') {
-      // Convert number inputs to actual numbers
-      setForm(f => ({ ...f, [name]: parseFloat(value) || 0 }));
     } else {
       setForm(f => ({ ...f, [name]: value }));
     }
   }
+
+  // Add a report field
+  function addReportField() {
+    if (!reportField.trim()) return;
+    
+    setReportFields([...reportFields, reportField.trim()]);
+    setReportField('');
+  }
   
+  // Remove a report field
+  function removeReportField(index: number) {
+    const updatedFields = [...reportFields];
+    updatedFields.splice(index, 1);
+    setReportFields(updatedFields);
+  }
+
   // Generate unique ID for custom fields
   function generateFieldId() {
     return `field_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -110,616 +115,754 @@ export default function CreateWorkflow() {
   function removeCustomField(id: string) {
     setCustomFields(customFields.filter(field => field.id !== id));
   }
-  
-  // Add option to dropdown field
-  function addOption(fieldId: string) {
-    if (!newOption.option.trim()) return;
-    
-    setCustomFields(customFields.map(field => {
-      if (field.id === fieldId) {
-        const updatedOptions = [...(field.options || []), newOption.option.trim()];
-        return { ...field, options: updatedOptions };
-      }
-      return field;
-    }));
-    
-    setNewOption({ fieldId: '', option: '' });
-  }
-  
-  // Remove option from dropdown field
-  function removeOption(fieldId: string, optionIndex: number) {
-    setCustomFields(customFields.map(field => {
-      if (field.id === fieldId && field.options) {
-        const updatedOptions = [...field.options];
-        updatedOptions.splice(optionIndex, 1);
-        return { ...field, options: updatedOptions };
-      }
-      return field;
-    }));
-  }
-  
-  // Add a report field
-  function addReportField() {
-    if (!newReportField.trim()) return;
-    setReportFields([...reportFields, newReportField.trim()]);
-    setNewReportField('');
-  }
-  
-  // Remove a report field
-  function removeReportField(index: number) {
-    const updatedFields = [...reportFields];
-    updatedFields.splice(index, 1);
-    setReportFields(updatedFields);
-  }
 
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (e.target.files) {
-      const fileList = Array.from(e.target.files);
-      setAttachments(prev => [...prev, ...fileList]);
-      
-      // Initialize descriptions for new files
-      const newDescriptions = {...attachmentDescriptions};
-      fileList.forEach(file => {
-        newDescriptions[file.name] = '';
-      });
-      setAttachmentDescriptions(newDescriptions);
-    }
-  }
-
-  function handleRemoveFile(fileName: string) {
-    setAttachments(prev => prev.filter(file => file.name !== fileName));
-    
-    // Remove description
-    const newDescriptions = {...attachmentDescriptions};
-    delete newDescriptions[fileName];
-    setAttachmentDescriptions(newDescriptions);
-  }
-
-  function handleDescriptionChange(fileName: string, description: string) {
-    setAttachmentDescriptions(prev => ({
-      ...prev,
-      [fileName]: description
-    }));
-  }
-
+  // Submit the form
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setError(null);
+    
     try {
-      // Validate custom fields if applicable
-      if (showCustomFields) {
-        // Check if any custom fields have empty names
-        const hasEmptyNames = customFields.some(field => !field.name.trim());
-        if (hasEmptyNames) {
-          throw new Error('All custom fields must have names');
-        }
-        
-        // Check if any dropdown fields have no options
-        const hasDropdownWithoutOptions = customFields.some(field => 
-          field.type === 'dropdown' && (!field.options || field.options.length === 0)
-        );
-        if (hasDropdownWithoutOptions) {
-          throw new Error('All dropdown fields must have at least one option');
-        }
-      }
-      
-      // Prepare data with proper types
-      const preparedData = {
+      // Prepare the form data to include custom fields and report fields
+      const formData = {
         ...form,
-        // Ensure numeric fields are numbers
-        mdr_fee: parseFloat(form.mdr_fee.toString()) || 0,
-        agent_fee: parseFloat(form.agent_fee.toString()) || 0,
-        system_fee: parseFloat(form.system_fee.toString()) || 0,
-        transaction_agent_fee: parseFloat(form.transaction_agent_fee.toString()) || 0,
-        dtr_fee: parseFloat(form.dtr_fee.toString()) || 0,
-        setup_fee: parseFloat(form.setup_fee.toString()) || 0,
-        maintenance_fee: parseFloat(form.maintenance_fee.toString()) || 0,
-        portal_fee: parseFloat(form.portal_fee.toString()) || 0,
-        // Add custom fields if applicable
-        custom_fields: showCustomFields ? customFields : [],
-        // Add report fields if applicable
-        report_fields: showReportFields ? reportFields : [],
+        custom_fields: customFields,
+        report_fields: reportFields
       };
       
-      console.log('Submitting workflow:', preparedData);
+      console.log('Submitting workflow data:', formData);
       
-      const res = await fetch(`${API_BASE}/workflows`, {
+      // Make the actual API call to create the workflow
+      const response = await fetch(`${API_BASE}/workflows`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(preparedData),
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
       });
       
-      if (!res.ok) {
-        // Try to parse the error response as JSON
-        const errorText = await res.text();
-        let errorMessage = 'Failed to create workflow';
-        
-        try {
-          const errorData = JSON.parse(errorText);
-          if (errorData.detail) {
-            errorMessage = typeof errorData.detail === 'string' 
-              ? errorData.detail 
-              : JSON.stringify(errorData.detail);
-          }
-        } catch (parseError) {
-          // If JSON parsing fails, use the raw text
-          errorMessage = errorText || errorMessage;
-        }
-        
-        throw new Error(errorMessage);
+      if (!response.ok) {
+        throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
       }
       
-      const createdWorkflow = await res.json();
+      const result = await response.json();
+      console.log('Workflow created successfully:', result);
       
-      // If there are attachments, upload them
-      if (attachments.length > 0) {
-        for (const file of attachments) {
-          const formData = new FormData();
-          formData.append('file', file);
-          
-          // Add description if available
-          if (attachmentDescriptions[file.name]) {
-            formData.append('description', attachmentDescriptions[file.name]);
-          }
-          
-          try {
-            await fetch(`${API_BASE}/workflows/${createdWorkflow.id}/attachments`, {
-              method: 'POST',
-              body: formData,
-            });
-          } catch (uploadError) {
-            console.error(`Error uploading file ${file.name}:`, uploadError);
-            // We continue even if one attachment fails
-          }
-        }
-      }
-      
+      // Navigate back to the dashboard to see the new workflow
       navigate('/');
-    } catch (e: any) {
-      console.error('Error creating workflow:', e);
-      // Make sure we display a proper error message, not [object Object]
-      const errorMessage = e.message || 'An unknown error occurred';
-      setError(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage, null, 2));
+    } catch (err) {
+      console.error('Error creating workflow:', err);
+      setError(`An error occurred: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setLoading(false);
     }
   }
 
+  // Show custom fields section based on integration type
+  const showCustomFieldsSection = form.integration_type === 'Online Biller' || form.integration_type === 'Offline Biller';
+
   return (
-    <div className="max-w-3xl mx-auto p-6">
-      <h2 className="text-2xl font-bold mb-4">Create New Workflow (UAT Request)</h2>
-      <form onSubmit={handleSubmit} className="space-y-4 bg-white p-6 rounded shadow">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block font-medium">Workflow ID</label>
-            <div className="input bg-gray-100 text-gray-600">[Auto-generated as WF00001 format]</div>
-          </div>
-          <div>
-            <label className="block font-medium">Biller/Integration Name</label>
-            <input name="biller_integration_name" value={form.biller_integration_name} onChange={handleChange} className="input" required />
-          </div>
-          <div>
-            <label className="block font-medium">Category</label>
-            <input name="category" value={form.category} onChange={handleChange} className="input" />
-          </div>
-          <div>
-            <label className="block font-medium">Integration Type</label>
-            <select name="integration_type" value={form.integration_type} onChange={handleChange} className="input" required>
-              <option value="">Select</option>
-              <option value="Online Merchant">Online Merchant</option>
-              <option value="Online Biller">Online Biller</option>
-              <option value="Offline Biller">Offline Biller</option>
-            </select>
-          </div>
-          <div>
-            <label className="block font-medium">Company Name</label>
-            <input name="company_name" value={form.company_name} onChange={handleChange} className="input" />
-          </div>
-          <div>
-            <label className="block font-medium">Phone Number</label>
-            <input name="phone_number" value={form.phone_number} onChange={handleChange} className="input" />
-          </div>
-          <div>
-            <label className="block font-medium">Email</label>
-            <input name="email" value={form.email} onChange={handleChange} className="input" type="email" />
-          </div>
-          <div>
-            <label className="block font-medium">Fees Type</label>
-            <select name="fees_type" value={form.fees_type} onChange={handleChange} className="input" required>
-              <option value="">Select</option>
-              <option value="Debit">Debit</option>
-              <option value="Credit">Credit</option>
-            </select>
-          </div>
-          <div>
-            <label className="block font-medium">Fees Style</label>
-            <select name="fees_style" value={form.fees_style} onChange={handleChange} className="input" required>
-              <option value="">Select</option>
-              <option value="Flat">Flat</option>
-              <option value="Percent">Percent</option>
-            </select>
-          </div>
-          <div>
-            <label className="block font-medium">MDR Fee</label>
-            <input name="mdr_fee" value={form.mdr_fee} onChange={handleChange} className="input" type="number" step="0.01" min="0" required />
-          </div>
-          {/* Fee Waive Section */}
-          <div className="col-span-2 mt-4 mb-2 border-t border-gray-200 pt-4">
-            <h3 className="text-lg font-medium text-gray-700">Fee Waiver Settings</h3>
-          </div>
-          
-          <div className="bg-gray-50 p-3 rounded col-span-2 mb-2">
-            <div className="flex items-center mb-2">
-              <input 
-                name="fee_waive" 
-                checked={form.fee_waive} 
-                onChange={handleChange} 
-                className="mr-2 h-4 w-4" 
-                type="checkbox" 
-                id="fee_waive"
-              />
-              <label htmlFor="fee_waive" className="font-medium">Enable Fee Waiver</label>
-            </div>
-            
-            {form.fee_waive && (
-              <div className="ml-6 p-3 bg-white rounded border border-gray-200">
-                <label className="block font-medium text-sm mb-1">Fee Waive End Date</label>
-                <input 
-                  name="fee_waive_end_date" 
-                  value={form.fee_waive_end_date} 
-                  onChange={handleChange} 
-                  className="input" 
-                  type="date" 
-                  required 
-                />
+    <div className="bg-gray-50 dark:bg-gray-900 min-h-screen py-8 px-4 sm:px-6">
+      <div className="max-w-5xl mx-auto">
+        <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-800 shadow-lg rounded-lg overflow-hidden">
+          {/* Header with gradient background */}
+          <div className="bg-gradient-to-r from-blue-600 to-blue-700 dark:from-blue-700 dark:to-blue-800 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-white">Create New Workflow</h1>
+                <p className="mt-2 text-blue-100 dark:text-blue-200">Define a new integration workflow with a biller</p>
               </div>
-            )}
-          </div>
-          
-          {/* Agent Toggle Section */}
-          <div className="col-span-2 mt-4 mb-2 border-t border-gray-200 pt-4">
-            <h3 className="text-lg font-medium text-gray-700">Agent Fee Settings</h3>
-          </div>
-          
-          <div className="bg-gray-50 p-3 rounded col-span-2 mb-2">
-            <div className="flex items-center mb-2">
-              <input 
-                name="agent_toggle" 
-                checked={form.agent_toggle} 
-                onChange={handleChange} 
-                className="mr-2 h-4 w-4" 
-                type="checkbox" 
-                id="agent_toggle"
-              />
-              <label htmlFor="agent_toggle" className="font-medium">Enable Agent Fees</label>
+              <Link 
+                to="/" 
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-blue-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors dark:text-blue-200 dark:bg-gray-700 dark:hover:bg-gray-600 dark:focus:ring-blue-600"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                Back to list
+              </Link>
             </div>
-            
-            {form.agent_toggle && (
-              <div className="ml-6 p-3 bg-white rounded border border-gray-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-medium text-sm mb-1">Agent Fee</label>
-                  <input 
-                    name="agent_fee" 
-                    value={form.agent_fee} 
-                    onChange={handleChange} 
-                    className="input" 
-                    type="number" 
-                    step="0.01" 
-                    min="0" 
-                    required 
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-sm mb-1">System Fee</label>
-                  <input 
-                    name="system_fee" 
-                    value={form.system_fee} 
-                    onChange={handleChange} 
-                    className="input" 
-                    type="number" 
-                    step="0.01" 
-                    min="0" 
-                    required 
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-sm mb-1">Transaction Agent Fee</label>
-                  <input 
-                    name="transaction_agent_fee" 
-                    value={form.transaction_agent_fee} 
-                    onChange={handleChange} 
-                    className="input" 
-                    type="number" 
-                    step="0.01" 
-                    min="0" 
-                    required 
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-sm mb-1">DTR Fee</label>
-                  <input 
-                    name="dtr_fee" 
-                    value={form.dtr_fee} 
-                    onChange={handleChange} 
-                    className="input" 
-                    type="number" 
-                    step="0.01" 
-                    min="0" 
-                    required 
-                  />
+          </div>
+
+          <div className="p-6">
+            {/* Error Display */}
+            {error && (
+              <div className="bg-red-100 dark:bg-red-900 border-l-4 border-red-500 text-red-700 dark:text-red-200 p-4 mb-6 rounded-md shadow-sm" role="alert">
+                <div className="flex items-center">
+                  <svg className="h-5 w-5 mr-2 text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <p className="font-medium">{error}</p>
                 </div>
               </div>
             )}
-          </div>
-          <div>
-            <label className="block font-medium">Business Owner</label>
-            <input name="business_owner" value={form.business_owner} onChange={handleChange} className="input" required />
-          </div>
-          <div>
-            <label className="block font-medium">Requested Go Live Date</label>
-            <input name="requested_go_live_date" value={form.requested_go_live_date} onChange={handleChange} className="input" type="date" required />
-          </div>
-          <div>
-            <label className="block font-medium">Setup Fee</label>
-            <input name="setup_fee" value={form.setup_fee} onChange={handleChange} className="input" type="number" step="0.01" min="0" required />
-          </div>
-          <div>
-            <label className="block font-medium">Requested By</label>
-            <input name="requested_by" value={form.requested_by} onChange={handleChange} className="input" required />
-          </div>
-          <div>
-            <label className="block font-medium">Last Updated By</label>
-            <input name="last_updated_by" value={form.last_updated_by} onChange={handleChange} className="input" required />
-          </div>
-          <div>
-            <label className="block font-medium">Go Live Date</label>
-            <input name="go_live_date" value={form.go_live_date} onChange={handleChange} className="input" type="date" required />
-          </div>
-        </div>
-        <div>
-          <label className="block font-medium">Remarks</label>
-          <textarea name="remarks" value={form.remarks} onChange={handleChange} className="input" />
-        </div>
-        
-        {/* Custom Fields Builder - Only shown for Online/Offline Biller */}
-        {showCustomFields && (
-          <div className="mt-6 mb-4 p-4 border border-blue-200 bg-blue-50 rounded-lg">
-            <h3 className="text-lg font-semibold mb-2">Custom Biller Form Fields</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Define the fields that will appear on the Biller's form for this integration.
-            </p>
-            
-            {customFields.length > 0 && (
-              <div className="space-y-6 mb-4">
-                {customFields.map((field) => (
-                  <div key={field.id} className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                    <div className="flex justify-between items-center mb-2">
-                      <h4 className="font-medium">Field Definition</h4>
-                      <button 
-                        type="button" 
-                        onClick={() => removeCustomField(field.id)} 
-                        className="text-red-600 hover:text-red-800 text-sm"
+          
+            {/* Basic Information Section */}
+            <div className="mb-6">
+              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                <div className="bg-gray-50 dark:bg-gray-700 px-4 py-3 border-b border-gray-200 dark:border-gray-600">
+                  <h2 className="text-lg font-medium text-gray-800 dark:text-gray-200 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Basic Information
+                  </h2>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Biller Integration Name</label>
+                      <input
+                        type="text"
+                        name="biller_integration_name"
+                        value={form.biller_integration_name}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                        required
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+                      <select
+                        name="category"
+                        value={form.category}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                        required
                       >
-                        Remove Field
+                        <option value="">Select a category</option>
+                        <option value="Banking">Banking</option>
+                        <option value="Insurance">Insurance</option>
+                        <option value="Utilities">Utilities</option>
+                        <option value="Telco">Telecommunications</option>
+                        <option value="Government">Government</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Integration Type</label>
+                      <select
+                        name="integration_type"
+                        value={form.integration_type}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                        required
+                      >
+                        <option value="">Select integration type</option>
+                        <option value="Online Biller">Online Biller</option>
+                        <option value="Offline Biller">Offline Biller</option>
+                        <option value="API">API</option>
+                        <option value="File Transfer">File Transfer</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Company Name</label>
+                      <input
+                        type="text"
+                        name="company_name"
+                        value={form.company_name}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number</label>
+                      <input
+                        type="tel"
+                        name="phone_number"
+                        value={form.phone_number}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                      <input
+                        type="email"
+                        name="email"
+                        value={form.email}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Business Owner</label>
+                      <input
+                        type="text"
+                        name="business_owner"
+                        value={form.business_owner}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Fee Structure Section */}
+            <div className="mb-6">
+              <div className="border-b border-gray-200 dark:border-gray-700 pb-2 mb-4">
+                <h2 className="text-xl font-medium text-gray-800 dark:text-gray-200 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Fee Structure
+                </h2>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fees Type</label>
+                  <select
+                    name="fees_type"
+                    value={form.fees_type}
+                    onChange={handleChange}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">Select fee type</option>
+                    <option value="Fixed">Fixed</option>
+                    <option value="Percentage">Percentage</option>
+                    <option value="Tiered">Tiered</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fees Style</label>
+                  <select
+                    name="fees_style"
+                    value={form.fees_style}
+                    onChange={handleChange}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">Select fee style</option>
+                    <option value="Debit Fee">Debit Fee</option>
+                    <option value="Credit Fee">Credit Fee</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">MDR Fee (%)</label>
+                  <div className="mt-1 relative rounded-md shadow-sm">
+                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                      <span className="text-gray-500 dark:text-gray-400 sm:text-sm">%</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="mdr_fee"
+                      value={form.mdr_fee}
+                      onChange={handleChange}
+                      className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 gap-4 mt-4">
+                {/* Waive Fee Section */}
+                <div className="p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="fee_waive"
+                      name="fee_waive"
+                      checked={form.fee_waive}
+                      onChange={handleChange}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="fee_waive" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                      Waive Fee
+                    </label>
+                  </div>
+                  
+                  {form.fee_waive && (
+                    <div className="mt-3">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fee Waive End Date</label>
+                      <input
+                        type="date"
+                        name="fee_waive_end_date"
+                        value={form.fee_waive_end_date}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                {/* Enable Agent Section */}
+                <div className="p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="agent_toggle"
+                      name="agent_toggle"
+                      checked={form.agent_toggle}
+                      onChange={handleChange}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="agent_toggle" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                      Enable Agent
+                    </label>
+                  </div>
+                </div>
+                
+                {/* Agent Fee Section - Only visible when agent_toggle is true */}
+                {form.agent_toggle && (
+                  <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md">
+                    <h3 className="text-md font-medium text-gray-700 dark:text-gray-300 mb-3">Agent App Fees Distribution</h3>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Agent Fee */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Agent Fee</label>
+                        <div className="mt-1 relative rounded-md shadow-sm">
+                          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                          </div>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            name="agent_fee"
+                            value={form.agent_fee}
+                            onChange={handleChange}
+                            className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* System Fee */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">System Fee</label>
+                        <div className="mt-1 relative rounded-md shadow-sm">
+                          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                          </div>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            name="system_fee"
+                            value={form.system_fee}
+                            onChange={handleChange}
+                            className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Transaction Agent Fee */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Transaction Agent Fee</label>
+                        <div className="mt-1 relative rounded-md shadow-sm">
+                          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                          </div>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            name="transaction_agent_fee"
+                            value={form.transaction_agent_fee}
+                            onChange={handleChange}
+                            className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* DTR Fee */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">DTR Fee</label>
+                        <div className="mt-1 relative rounded-md shadow-sm">
+                          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                          </div>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            name="dtr_fee"
+                            value={form.dtr_fee}
+                            onChange={handleChange}
+                            className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Additional Fees Section */}
+            <div className="mb-6">
+              <div className="border-b border-gray-200 dark:border-gray-700 pb-2 mb-4">
+                <h2 className="text-xl font-medium text-gray-800 dark:text-gray-200 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Additional Fees
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Setup Fee */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Setup Fee</label>
+                  <div className="mt-1 relative rounded-md shadow-sm">
+                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                      <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="setup_fee"
+                      value={form.setup_fee}
+                      onChange={handleChange}
+                      className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center">
+                    <input
+                      type="checkbox"
+                      id="setup_fee_waive"
+                      name="setup_fee_waive"
+                      checked={form.setup_fee_waive}
+                      onChange={handleChange}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="setup_fee_waive" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                      Waive Setup Fee
+                    </label>
+                  </div>
+                  {form.setup_fee_waive && (
+                    <div className="mt-2">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waive Until</label>
+                      <input
+                        type="date"
+                        name="setup_fee_waive_end_date"
+                        value={form.setup_fee_waive_end_date}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                {/* Maintenance Fee */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Maintenance Fee</label>
+                  <div className="mt-1 relative rounded-md shadow-sm">
+                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                      <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="maintenance_fee"
+                      value={form.maintenance_fee}
+                      onChange={handleChange}
+                      className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center">
+                    <input
+                      type="checkbox"
+                      id="maintenance_fee_waive"
+                      name="maintenance_fee_waive"
+                      checked={form.maintenance_fee_waive}
+                      onChange={handleChange}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="maintenance_fee_waive" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                      Waive Maintenance Fee
+                    </label>
+                  </div>
+                  {form.maintenance_fee_waive && (
+                    <div className="mt-2">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waive Until</label>
+                      <input
+                        type="date"
+                        name="maintenance_fee_waive_end_date"
+                        value={form.maintenance_fee_waive_end_date}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                {/* Portal Fee */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Portal Fee</label>
+                  <div className="mt-1 relative rounded-md shadow-sm">
+                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                      <span className="text-gray-500 dark:text-gray-400 sm:text-sm">$</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="portal_fee"
+                      value={form.portal_fee}
+                      onChange={handleChange}
+                      className="w-full rounded-md border border-gray-300 dark:border-gray-600 pl-7 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center">
+                    <input
+                      type="checkbox"
+                      id="portal_fee_waive"
+                      name="portal_fee_waive"
+                      checked={form.portal_fee_waive}
+                      onChange={handleChange}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="portal_fee_waive" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                      Waive Portal Fee
+                    </label>
+                  </div>
+                  {form.portal_fee_waive && (
+                    <div className="mt-2">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Waive Until</label>
+                      <input
+                        type="date"
+                        name="portal_fee_waive_end_date"
+                        value={form.portal_fee_waive_end_date}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Implementation Details Section */}
+            <div className="mb-6">
+              <div className="border-b border-gray-200 dark:border-gray-700 pb-2 mb-4">
+                <h2 className="text-xl font-medium text-gray-800 dark:text-gray-200 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  Implementation Details
+                </h2>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Requested By</label>
+                  <input
+                    type="text"
+                    name="requested_by"
+                    value={form.requested_by}
+                    onChange={handleChange}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Requested Go Live Date</label>
+                  <input
+                    type="date"
+                    name="requested_go_live_date"
+                    value={form.requested_go_live_date}
+                    onChange={handleChange}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+                
+
+                
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Remarks</label>
+                  <textarea
+                    name="remarks"
+                    value={form.remarks}
+                    onChange={handleChange}
+                    rows={4}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Additional notes or comments about this workflow..."
+                  />
+                </div>
+              </div>
+            </div>
+
+
+
+            {/* Custom Fields Section - Only shown for Online/Offline Biller types */}
+            {showCustomFieldsSection && (
+              <div className="border-t pt-6 border-gray-200 dark:border-gray-700 mb-6">
+                <div className="border-b border-gray-200 dark:border-gray-700 pb-2 mb-4">
+                  <h2 className="text-xl font-medium text-gray-800 dark:text-gray-200 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                    </svg>
+                    Custom Fields for Biller Form
+                  </h2>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md border border-blue-100 dark:border-blue-800">
+                  <span className="font-medium text-blue-600 dark:text-blue-400">Note:</span> Define custom fields that will be included in the biller form. These fields will be dynamically generated based on the biller's requirements.
+                </p>
+                
+                <button
+                  type="button"
+                  onClick={addCustomField}
+                  className="mb-4 inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  <svg className="h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add Custom Field
+                </button>
+
+                {customFields.map((field, index) => (
+                  <div key={field.id} className="mb-4 p-4 border border-gray-200 dark:border-gray-700 rounded-md">
+                    <div className="flex justify-between mb-2">
+                      <h3 className="text-md font-medium text-gray-700 dark:text-gray-300">Field #{index + 1}</h3>
+                      <button
+                        type="button"
+                        onClick={() => removeCustomField(field.id)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        Remove
                       </button>
                     </div>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {/* Field Name */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium mb-1">Field Name</label>
-                        <input 
-                          type="text" 
-                          value={field.name} 
-                          onChange={(e) => updateCustomField(field.id, { name: e.target.value })} 
-                          className="input" 
-                          placeholder="e.g. Merchant ID"
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Field Name</label>
+                        <input
+                          type="text"
+                          value={field.name}
+                          onChange={(e) => updateCustomField(field.id, { name: e.target.value })}
+                          className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          placeholder="Enter field name"
                         />
                       </div>
                       
-                      {/* Field Type */}
                       <div>
-                        <label className="block text-sm font-medium mb-1">Field Type</label>
-                        <select 
-                          value={field.type} 
-                          onChange={(e) => updateCustomField(field.id, { 
-                            type: e.target.value as 'text' | 'number' | 'dropdown' 
-                          })} 
-                          className="input"
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Field Type</label>
+                        <select
+                          value={field.type}
+                          onChange={(e) => updateCustomField(field.id, { type: e.target.value as 'text' | 'number' | 'dropdown' })}
+                          className="w-full rounded-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                         >
                           <option value="text">Text</option>
                           <option value="number">Number</option>
                           <option value="dropdown">Dropdown</option>
                         </select>
                       </div>
-                      
-                      {/* Required Field */}
-                      <div className="flex items-center pt-6">
-                        <input 
-                          type="checkbox" 
-                          id={`required-${field.id}`} 
-                          checked={field.required} 
-                          onChange={(e) => updateCustomField(field.id, { required: e.target.checked })} 
-                          className="mr-2 h-4 w-4" 
-                        />
-                        <label htmlFor={`required-${field.id}`} className="text-sm font-medium">
-                          Required Field
-                        </label>
-                      </div>
                     </div>
-                    
-                    {/* Dropdown Options - Only show for dropdown type */}
-                    {field.type === 'dropdown' && (
-                      <div className="mt-3 border-t pt-3">
-                        <label className="block text-sm font-medium mb-1">Dropdown Options</label>
-                        
-                        {/* Display existing options */}
-                        {field.options && field.options.length > 0 && (
-                          <div className="mb-2 flex flex-wrap gap-2">
-                            {field.options.map((option, index) => (
-                              <div key={index} className="bg-blue-50 px-2 py-1 rounded-md flex items-center text-sm">
-                                <span>{option}</span>
-                                <button 
-                                  type="button"
-                                  onClick={() => removeOption(field.id, index)}
-                                  className="ml-2 text-red-500 hover:text-red-700"
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        {/* Add new option */}
-                        <div className="flex">
-                          <input 
-                            type="text" 
-                            value={newOption.fieldId === field.id ? newOption.option : ''} 
-                            onChange={(e) => setNewOption({ fieldId: field.id, option: e.target.value })} 
-                            className="input mr-2" 
-                            placeholder="Add option..."
-                          />
-                          <button 
-                            type="button" 
-                            onClick={() => addOption(field.id)} 
-                            className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>
-                    )}
+
+                    <div className="mt-2 flex items-center">
+                      <input
+                        type="checkbox"
+                        id={`required-${field.id}`}
+                        checked={field.required}
+                        onChange={(e) => updateCustomField(field.id, { required: e.target.checked })}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor={`required-${field.id}`} className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                        Required Field
+                      </label>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
             
-            <button 
-              type="button" 
-              onClick={addCustomField} 
-              className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 flex items-center"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add New Field
-            </button>
-          </div>
-        )}
-        
-        {/* Report Fields - Only shown for Online/Offline Biller */}
-        {showReportFields && (
-          <div className="mt-6 mb-4 p-4 border border-green-200 bg-green-50 rounded-lg">
-            <h3 className="text-lg font-semibold mb-2">Transaction Report Fields</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Define the field names that billers want to see in transaction reports.
-            </p>
-            
-            {reportFields.length > 0 && (
-              <div className="mb-4 flex flex-wrap gap-2">
-                {reportFields.map((field, index) => (
-                  <div key={index} className="bg-white px-3 py-1.5 rounded-md flex items-center text-sm shadow-sm">
-                    <span>{field}</span>
-                    <button 
+            {/* Report Fields Section - Only shown for Online/Offline Biller types */}
+            {showCustomFieldsSection && (
+              <div className="border-t pt-6 border-gray-200 dark:border-gray-700 mb-6">
+                <div className="border-b border-gray-200 dark:border-gray-700 pb-2 mb-4">
+                  <h2 className="text-xl font-medium text-gray-800 dark:text-gray-200 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Report Fields
+                  </h2>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md border border-blue-100 dark:border-blue-800">
+                  <span className="font-medium text-blue-600 dark:text-blue-400">Note:</span> Define the field names that billers want to see in their transaction reports. These field names will be used when generating transaction reports.
+                </p>
+                
+                <div className="mb-4">
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {reportFields.map((field, index) => (
+                      <div key={index} className="flex items-center bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                        <span className="text-sm text-gray-700 dark:text-gray-300">{field}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeReportField(index)}
+                          className="ml-2 text-gray-500 hover:text-red-500"
+                        >
+                          <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="flex">
+                    <input
+                      type="text"
+                      value={reportField}
+                      onChange={(e) => setReportField(e.target.value)}
+                      className="flex-1 rounded-l-md border border-gray-300 dark:border-gray-600 p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                      placeholder="Enter field name"
+                    />
+                    <button
                       type="button"
-                      onClick={() => removeReportField(index)}
-                      className="ml-2 text-red-500 hover:text-red-700"
+                      onClick={addReportField}
+                      className="px-3 py-2 bg-blue-600 text-white rounded-r-md hover:bg-blue-700 flex items-center"
                     >
-                      ×
+                      <svg className="h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Add
                     </button>
                   </div>
-                ))}
+                </div>
               </div>
             )}
-            
-            {/* Add new report field */}
-            <div className="flex">
-              <input 
-                type="text" 
-                value={newReportField} 
-                onChange={(e) => setNewReportField(e.target.value)} 
-                className="input mr-2" 
-                placeholder="Add report field name..."
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    addReportField();
-                  }
-                }}
-              />
-              <button 
-                type="button" 
-                onClick={addReportField} 
-                className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600"
-              >
-                Add
-              </button>
+
+            {/* Submit Button */}
+            <div className="pt-6 border-t border-gray-200 dark:border-gray-700 mt-6">
+              <div className="flex justify-end items-center gap-3">
+                <Link
+                  to="/"
+                  className="inline-flex justify-center py-2.5 px-5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:border-gray-600 dark:hover:bg-gray-600 transition-colors duration-150"
+                >
+                  Cancel
+                </Link>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="inline-flex items-center justify-center py-2.5 px-5 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-blue-700 dark:hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
+                >
+                  {loading ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Creating...
+                    </>
+                  ) : 'Create Workflow'}
+                </button>
+              </div>
             </div>
           </div>
-        )}
-        
-        {/* File Attachments Section */}
-        <div className="mt-4">
-          <h3 className="text-lg font-semibold mb-2">Attachments</h3>
-          <div className="mb-2">
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              className="hidden"
-              multiple
-            />
-            <button 
-              type="button" 
-              onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded"
-            >
-              Add Attachments
-            </button>
-          </div>
-          
-          {/* List of attached files */}
-          {attachments.length > 0 && (
-            <div className="bg-gray-50 p-3 rounded">
-              <h4 className="text-sm font-medium mb-2">Files to upload:</h4>
-              <ul className="space-y-2">
-                {attachments.map((file) => (
-                  <li key={file.name} className="flex flex-col p-2 bg-white rounded shadow-sm">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-medium truncate max-w-xs">{file.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveFile(file.name)}
-                        className="text-red-500 hover:text-red-700"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                    <div className="w-full">
-                      <input
-                        type="text"
-                        placeholder="Description (optional)"
-                        value={attachmentDescriptions[file.name] || ''}
-                        onChange={(e) => handleDescriptionChange(file.name, e.target.value)}
-                        className="w-full text-sm p-1 border border-gray-300 rounded"
-                      />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-        <div className="flex gap-4">
-          <button type="submit" className="btn-primary" disabled={loading}>{loading ? 'Submitting...' : 'Create Workflow'}</button>
-          <button type="button" className="btn-secondary" onClick={() => navigate('/')}>Cancel</button>
-        </div>
-        {error && <div className="text-red-600 mt-2">{error}</div>}
-      </form>
+        </form>
+      </div>
     </div>
   );
 }
-
